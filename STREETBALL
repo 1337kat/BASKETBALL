@@ -1,0 +1,252 @@
+-- // === Services ===
+local plr = game.Players.LocalPlayer
+local uis = game:GetService("UserInputService")
+local rs  = game:GetService("RunService")
+local cg  = game:GetService("CoreGui")
+
+-- // === State ===
+local hasBall, readyToShoot, toggleOn = false, false, true
+local CurrentMessage, NotifyGui = nil, nil
+local toggleSession = 0
+local lastToggleAt = 0
+
+-- // === Notification UI ===
+if not NotifyGui then
+    NotifyGui = Instance.new("ScreenGui")
+    NotifyGui.Name = "NotifyGui"
+    NotifyGui.Parent = cg
+
+    local template = Instance.new("TextLabel")
+    template.AnchorPoint = Vector2.new(0.5, 0.5)
+    template.BackgroundTransparency = 1
+    template.Position = UDim2.new(0.5, 0, 0.9, 0)
+    template.Size = UDim2.new(0.8, 0, 0.1, 0)
+    template.Font = Enum.Font.Code
+    template.TextSize = 30
+    template.TextWrapped = true
+    template.Text = ""
+    template.TextColor3 = Color3.fromRGB(255,255,255)
+    template.Parent = NotifyGui
+    _G.Template = template
+end
+
+local function notify(msg, clr)
+    if CurrentMessage then CurrentMessage:Destroy() end
+    CurrentMessage = _G.Template:Clone()
+    CurrentMessage.Text = msg
+    CurrentMessage.TextColor3 = clr
+    CurrentMessage.Parent = NotifyGui
+    task.spawn(function()
+        task.wait(2)
+        if CurrentMessage then
+            CurrentMessage:Destroy()
+            CurrentMessage = nil
+        end
+    end)
+end
+
+local function showToggleMsg()
+    notify(toggleOn and "Toggle ON" or "Toggle OFF",
+        toggleOn and Color3.fromRGB(25,255,25) or Color3.fromRGB(255,25,25))
+end
+
+-- // === Game refs ===
+local ShootRemote = game.ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Shoot")
+local c = plr:WaitForChild("PlayerGui", 9e9).Power.PowerFrame.Power
+local d = plr.Character and (plr.Character:FindFirstChild("E_V") and plr.Character.E_V:FindFirstChild("AddPower")
+            or plr.Character:FindFirstChild("AddPower"))
+
+local e, f, g = "75", {}, nil
+local h = true
+
+-- // === Auto-capture current shoot key ===
+local ShootKey = nil
+local old; old = hookmetamethod(game, "__namecall", function(self, ...)
+    local method = getnamecallmethod()
+    if method == "FireServer" and self == ShootRemote then
+        local args = {...}
+        if type(args[3]) == "string" and not ShootKey then
+            ShootKey = args[3]
+            warn("[✅ Shoot Key Captured]:", ShootKey)
+            notify("Shoot key captured!", Color3.fromRGB(0,255,0))
+        end
+    end
+    return old(self, ...)
+end)
+
+-- // === Rim cache ===
+for _, j in ipairs(workspace:GetDescendants()) do
+    if j:IsA("BasePart") and j.Name == "Lol" and j.Parent and j.Parent.Name == "Rim" then
+        f[#f+1] = j
+    end
+end
+
+local lastNearestAt = 0
+local function l()
+    if tick() - lastNearestAt > 0.5 then
+        local nearest, best = nil, math.huge
+        local torso = plr.Character and plr.Character:FindFirstChild("Torso")
+        if not torso then return g end
+        local o = torso.Position
+        for _, p in ipairs(f) do
+            local q = (o - p.Position).Magnitude
+            if q < best then nearest, best = p, q end
+        end
+        g = nearest
+        lastNearestAt = tick()
+    end
+    return g
+end
+
+local function r(dist)
+    local s = { ["75"] = 5.61, ["80"] = 4.22, ["85"] = 5.64, ["90"] = 5.05 }
+    return Vector3.new(0, 43 + math.clamp(dist / 15, s[e] - 0.05, s[e]), 0)
+end
+
+local lastMoveAt = 0
+local velComp = Vector3.new()
+local function v(p)
+    if tick() - lastMoveAt > 0.1 then
+        local hum = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
+        if hum then
+            velComp = Vector3.new(hum.MoveDirection.X * 1.5, 0, hum.MoveDirection.Z * 1.5)
+        end
+        lastMoveAt = tick()
+    end
+    local torso = plr.Character and plr.Character:FindFirstChild("Torso")
+    if not torso then return p.Position end
+    local w = (torso.Position - p.Position).Magnitude
+    return p.Position + r(w) - velComp
+end
+
+-- // === Shooting ===
+local function shootBall()
+    if not (hasBall and readyToShoot and toggleOn) then return end
+    if not ShootKey then
+        warn("Shoot key not captured yet. Try a manual shot once.")
+        return
+    end
+
+    local p = l()
+    if not p then return end
+    local A = v(p)
+    local head = plr.Character and plr.Character:FindFirstChild("Head")
+    local root = plr.Character and plr.Character.PrimaryPart
+    if not (head and root) then return end
+
+    local B = (A - head.Position).Unit
+    local C = root.Position + B * 3.8
+    if C.Y - root.Position.Y < 4 then
+        C = root.Position + B * 4
+    end
+
+    ShootRemote:FireServer(A, C, ShootKey)
+    readyToShoot = false
+end
+
+-- // === Movement / Power ===
+local function handleMovement()
+    if not toggleOn then return end
+    local char = plr.Character
+    if not char then return end
+    hasBall = char:FindFirstChild("Basketball") ~= nil
+    if hasBall then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        local torso = char:FindFirstChild("Torso")
+        if hum and torso then hum:MoveTo(torso.Position) end
+    end
+end
+
+local function updatePower(targetPower, session)
+    task.spawn(function()
+        while toggleOn and session == toggleSession do
+            local char = plr.Character
+            if not char or not char:FindFirstChild("Basketball") or not getgenv().AutoPower then break end
+            local currentPower = tonumber(c.Text)
+            if currentPower ~= targetPower then
+                if d and d.FireServer then d:FireServer(currentPower < targetPower and 5 or -5) end
+                task.wait(0.2)
+            else break end
+        end
+    end)
+end
+
+local function ensurePower(session)
+    task.spawn(function()
+        while toggleOn and session == toggleSession do
+            local p = l()
+            local F = tonumber(c.Text)
+            local torso = plr.Character and plr.Character:FindFirstChild("Torso")
+            if p and torso then
+                local w = (torso.Position - p.Position).Magnitude
+                local I = math.floor(w)
+                if I == 57 and F ~= 75 then updatePower(75, session)
+                elseif I == 64 and F ~= 80 then updatePower(80, session)
+                elseif I == 70 and F ~= 85 then updatePower(85, session)
+                elseif I == 76 and F ~= 90 then updatePower(90, session) end
+            end
+            task.wait(0.2)
+        end
+    end)
+end
+
+local function handleJumped()
+    if not toggleOn then return end
+    task.wait(0.225)
+    shootBall()
+end
+
+-- // === Connection Management ===
+local jumpConn, moveConn
+local function connectActive()
+    if jumpConn then jumpConn:Disconnect() jumpConn=nil end
+    if moveConn then moveConn:Disconnect() moveConn=nil end
+    if plr.Character and plr.Character:FindFirstChildOfClass("Humanoid") then
+        jumpConn = plr.Character:FindFirstChildOfClass("Humanoid").Jumping:Connect(handleJumped)
+    end
+    moveConn = rs.Stepped:Connect(handleMovement)
+    ensurePower(toggleSession)
+end
+
+local function disconnectActive()
+    if jumpConn then jumpConn:Disconnect() jumpConn=nil end
+    if moveConn then moveConn:Disconnect() moveConn=nil end
+end
+
+-- // === Input (always connected) ===
+uis.InputBegan:Connect(function(input, gp)
+    if gp or input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+    local key = input.KeyCode.Name
+    if key == "Space" and toggleOn then
+        readyToShoot = true
+        local hum = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
+        if hum then hum.Jump = true end
+    elseif key == "V" then
+        if tick() - lastToggleAt < 0.12 then return end
+        lastToggleAt = tick()
+        toggleOn = not toggleOn
+        toggleSession += 1
+        showToggleMsg()
+        if toggleOn then connectActive() else disconnectActive() end
+    end
+end)
+
+-- // === Respawn Handling ===
+plr.CharacterAdded:Connect(function(char)
+    plr.Character = char
+    c = plr:WaitForChild("PlayerGui",9e9).Power.PowerFrame.Power
+    local ev = char:WaitForChild("E_V",5)
+    d = (ev and ev:FindFirstChild("AddPower")) or char:FindFirstChild("AddPower") or d
+    disconnectActive()
+    if toggleOn then toggleSession += 1; connectActive() end
+end)
+
+plr.Character.ChildAdded:Connect(function(k)
+    if k:IsA("Tool") and k.Name=="Basketball" then
+        h=false; task.wait(1); h=true
+    end
+end)
+
+-- // === Boot ===
+connectActive()
+showToggleMsg()
