@@ -1,0 +1,210 @@
+--// ===================================================
+--//   AUTO AIM BASKETBALL SHOOTER (TRUE VECTOR LOGGER)
+--//   Logs only actual in-game shot vectors (no mouse)
+--// ===================================================
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CoreGui = game:GetService("CoreGui")
+local Camera = workspace.CurrentCamera
+local Workspace = game:GetService("Workspace")
+
+local plr = Players.LocalPlayer
+local char = plr.Character or plr.CharacterAdded:Wait()
+local remotes = ReplicatedStorage:WaitForChild("Remotes")
+local shootRemote = remotes:WaitForChild("Shoot")
+
+local toggleOn, DotsEnabled = true, true
+local shootKey, selectedRim = nil, nil
+
+-- Completely ignore mouse for aiming
+pcall(function()
+	local mouse = plr:GetMouse()
+	if mouse then mouse.Icon = "rbxassetid://0" end
+end)
+
+-- === Simple Notify ===
+local function notify(msg, color)
+	local gui = Instance.new("ScreenGui", CoreGui)
+	gui.ResetOnSpawn = false
+	local label = Instance.new("TextLabel", gui)
+	label.AnchorPoint = Vector2.new(0.5, 0.5)
+	label.BackgroundTransparency = 1
+	label.TextColor3 = color or Color3.new(1, 1, 1)
+	label.Font = Enum.Font.Code
+	label.TextSize = 26
+	label.Text = msg
+	label.Position = UDim2.new(0.5, 0, 0.9, 0)
+	task.spawn(function() task.wait(1.2) gui:Destroy() end)
+end
+
+-- === Rim Dots ===
+local RimDots = {}
+local RimSize = Vector3.new(3.632131576538086, 0.5587897300720215, 3.632131576538086)
+local function addRimDot(rim)
+	local dot = Drawing.new("Circle")
+	dot.Radius, dot.Filled, dot.Color = 4, true, Color3.new(1, 0, 0)
+	RimDots[rim] = dot
+end
+local function removeRimDot(rim)
+	if RimDots[rim] then RimDots[rim]:Remove() RimDots[rim] = nil end
+	if selectedRim == rim then selectedRim = nil end
+end
+
+RunService.RenderStepped:Connect(function()
+	for rim, dot in pairs(RimDots) do
+		if rim:IsDescendantOf(Workspace) and DotsEnabled then
+			local pos, on = Camera:WorldToViewportPoint(rim.Position)
+			dot.Position, dot.Visible = Vector2.new(pos.X, pos.Y), on
+			dot.Color = (rim == selectedRim) and Color3.new(1, 1, 0) or Color3.new(1, 0, 0)
+			dot.Radius = (rim == selectedRim) and 6 or 4
+		else
+			dot.Visible = false
+		end
+	end
+end)
+
+Workspace.DescendantAdded:Connect(function(o)
+	if o:IsA("BasePart") and o.Name == "Rim" and o.Size == RimSize then addRimDot(o) end
+end)
+Workspace.DescendantRemoving:Connect(removeRimDot)
+for _, v in ipairs(Workspace:GetDescendants()) do
+	if v:IsA("BasePart") and v.Name == "Rim" and v.Size == RimSize then addRimDot(v) end
+end
+
+-- === Auto Lock Nearest Rim ===
+task.spawn(function()
+	while task.wait(0.1) do
+		if not toggleOn then continue end
+		local root = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+		if not root then continue end
+		local bestRim, bestDist = nil, 85
+		for rim in pairs(RimDots) do
+			if rim:IsDescendantOf(Workspace) then
+				local dist = (rim.Position - root.Position).Magnitude
+				if dist < bestDist then
+					local _, on = Camera:WorldToViewportPoint(rim.Position)
+					if on then bestRim, bestDist = rim, dist end
+				end
+			end
+		end
+		if bestRim and bestRim ~= selectedRim then
+			selectedRim = bestRim
+			notify("🎯 Locked Rim", Color3.fromRGB(255,230,0))
+		end
+	end
+end)
+
+-- === Toggles ===
+UserInputService.InputBegan:Connect(function(i, gp)
+	if gp then return end
+	if i.KeyCode == Enum.KeyCode.O then
+		DotsEnabled = not DotsEnabled
+	elseif i.KeyCode == Enum.KeyCode.V then
+		toggleOn = not toggleOn
+		notify(toggleOn and "System ON" or "System OFF",
+			toggleOn and Color3.new(0,1,0) or Color3.new(1,0,0))
+	end
+end)
+
+-- === Minimal Vector Logger ===
+local lastVector, lastLog = Vector3.zero, 0
+local logGui = Instance.new("ScreenGui", CoreGui)
+logGui.Name = "ShotLogger"
+logGui.ResetOnSpawn = false
+local label = Instance.new("TextLabel", logGui)
+label.AnchorPoint = Vector2.new(1, 1)
+label.Position = UDim2.new(1, -10, 1, -10)
+label.Size = UDim2.new(0, 280, 0, 160)
+label.BackgroundColor3 = Color3.fromRGB(20,20,25)
+label.BackgroundTransparency = 0.25
+label.TextColor3 = Color3.fromRGB(255,255,255)
+label.Font = Enum.Font.Code
+label.TextSize = 14
+label.TextXAlignment = Enum.TextXAlignment.Left
+label.TextYAlignment = Enum.TextYAlignment.Top
+label.TextWrapped = false
+label.Text = "[Shot Logs]\n"
+label.Parent = logGui
+
+local function logVector(vec)
+	local now = tick()
+	if (now - lastLog) < 0.05 or (vec - lastVector).Magnitude < 0.01 then return end
+	lastVector = vec
+	lastLog = now
+	label.Text ..= string.format("X%.2f  Y%.2f  Z%.2f\n", vec.X, vec.Y, vec.Z)
+	if #label.Text > 800 then label.Text = "[Shot Logs]\n" end
+end
+
+-- === Hook Shoot Remote for real shot vectors only ===
+local old
+old = hookmetamethod(game, "__namecall", function(self, ...)
+	local m = getnamecallmethod()
+	if m == "FireServer" and self == shootRemote then
+		local args = {...}
+		if typeof(args[1]) == "Vector3" and typeof(args[2]) == "Vector3" then
+			-- true physics shot, not mouse or cursor data
+			logVector(args[1])
+		end
+		if type(args[3]) == "string" and not shootKey then
+			shootKey = args[3]
+			notify("Shoot key captured!", Color3.new(0,1,0))
+		end
+	end
+	return old(self, ...)
+end)
+
+-- === Smart Aim ===
+local lastTick, moveOffset = 0, Vector3.zero
+local function computeOffset()
+	if tick() - lastTick > 0.1 then
+		local hum = plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
+		local moveDir = (hum and hum.MoveDirection) or Vector3.zero
+		moveOffset = Vector3.new(moveDir.X * 1.5, 0, moveDir.Z * 1.5)
+		lastTick = tick()
+	end
+	return moveOffset
+end
+
+local function computeArc(dist) return Vector3.new(0, 43 + (dist / 15), 0) end
+
+local function smartAim(rim)
+	local offset = computeOffset()
+	local root = plr.Character:FindFirstChild("HumanoidRootPart")
+	if not root then return rim.Position end
+	local dist = (root.Position - rim.Position).Magnitude
+	return rim.Position + computeArc(dist) - offset
+end
+
+-- === Shoot ===
+local function shootAtTarget()
+	if not (selectedRim and selectedRim:IsDescendantOf(Workspace)) then
+		return notify("❌ No Target", Color3.new(1,0.3,0.3))
+	end
+	if not shootKey then
+		return notify("⚙️ Shoot Key Missing", Color3.new(1,0.8,0.3))
+	end
+	local char = plr.Character
+	if not char then return end
+	local head, root = char:FindFirstChild("Head"), char.PrimaryPart
+	if not (head and root) then return end
+
+	local aimPos = smartAim(selectedRim)
+	local dir = (aimPos - head.Position).Unit
+	local shootFrom = root.Position + dir * 4
+	shootRemote:FireServer(aimPos, shootFrom, shootKey)
+	notify("🏀 Shot Fired!", Color3.new(0,1,0))
+end
+
+-- === Mouse-independent click trigger ===
+UserInputService.InputBegan:Connect(function(i, gp)
+	if gp or not toggleOn then return end
+	if i.UserInputType == Enum.UserInputType.MouseButton1 then
+		shootAtTarget() -- purely logical, no cursor influence
+	end
+end)
+
+print("[🏀 Auto Aim Basketball — Real Vector Logger Loaded]")
+print("[V] Toggle System | [O] Toggle Dots")
