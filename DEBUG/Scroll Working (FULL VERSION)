@@ -1,0 +1,360 @@
+--// ===================================================
+--//   AUTO AIM BASKETBALL SHOOTER + VECTOR3 ANALYTICS (SCROLL-STABLE)
+--//   Your original shooter intact + enterprise-style numeric console
+--// ===================================================
+
+--// === Services ===
+local Players = game:GetService('Players')
+local UserInputService = game:GetService('UserInputService')
+local RunService = game:GetService('RunService')
+local ReplicatedStorage = game:GetService('ReplicatedStorage')
+local CoreGui = game:GetService('CoreGui')
+local Camera = workspace.CurrentCamera
+
+--// === Player/Remotes ===
+local plr = Players.LocalPlayer
+local char = plr.Character or plr.CharacterAdded:Wait()
+local remotes = ReplicatedStorage:WaitForChild('Remotes')
+local shootRemote = remotes:WaitForChild('Shoot')
+
+--// === Toggles/State ===
+local toggleOn, DotsEnabled = true, true
+local shootKey, selectedRim = nil, nil
+
+--// === Notify ===
+local function notify(msg, color)
+    local gui = Instance.new('ScreenGui')
+    gui.Name = 'TmpNotify'
+    gui.ResetOnSpawn = false
+    gui.Parent = CoreGui
+    local label = Instance.new('TextLabel', gui)
+    label.AnchorPoint = Vector2.new(0.5, 0.5)
+    label.Position = UDim2.new(0.5, 0, 0.9, 0)
+    label.BackgroundTransparency = 1
+    label.TextColor3 = color or Color3.new(1, 1, 1)
+    label.Font = Enum.Font.Code
+    label.TextSize = 26
+    label.Text = msg
+    task.spawn(function()
+        task.wait(1.5)
+        gui:Destroy()
+    end)
+end
+
+--// === Rim Dot ESP (unchanged) ===
+local RimDots = {}
+local RimSize =
+    Vector3.new(3.632131576538086, 0.5587897300720215, 3.632131576538086)
+
+local function addRimDot(rim)
+    local dot = Drawing.new('Circle')
+    dot.Radius, dot.Filled, dot.Color = 4, true, Color3.new(1, 0, 0)
+    RimDots[rim] = dot
+end
+
+local function removeRimDot(rim)
+    if RimDots[rim] then
+        RimDots[rim]:Remove()
+        RimDots[rim] = nil
+    end
+    if selectedRim == rim then
+        selectedRim = nil
+    end
+end
+
+RunService.RenderStepped:Connect(function()
+    for rim, dot in pairs(RimDots) do
+        if rim:IsDescendantOf(workspace) and DotsEnabled then
+            local pos, on = Camera:WorldToViewportPoint(rim.Position)
+            dot.Position, dot.Visible = Vector2.new(pos.X, pos.Y), on
+            dot.Color = (rim == selectedRim) and Color3.new(1, 1, 0)
+                or Color3.new(1, 0, 0)
+            dot.Radius = (rim == selectedRim) and 6 or 4
+        else
+            dot.Visible = false
+        end
+    end
+end)
+
+workspace.DescendantAdded:Connect(function(o)
+    if o:IsA('BasePart') and o.Name == 'Rim' and o.Size == RimSize then
+        addRimDot(o)
+    end
+end)
+
+workspace.DescendantRemoving:Connect(removeRimDot)
+
+for _, v in ipairs(workspace:GetDescendants()) do
+    if v:IsA('BasePart') and v.Name == 'Rim' and v.Size == RimSize then
+        addRimDot(v)
+    end
+end
+
+--// === Auto Rim Lock (unchanged) ===
+task.spawn(function()
+    while task.wait(0.1) do
+        if not toggleOn then
+            continue
+        end
+        local root = plr.Character
+            and plr.Character:FindFirstChild('HumanoidRootPart')
+        if not root then
+            continue
+        end
+        local bestRim, bestDist = nil, 85
+        for rim in pairs(RimDots) do
+            if rim:IsDescendantOf(workspace) then
+                local dist = (rim.Position - root.Position).Magnitude
+                if dist < bestDist then
+                    local _, on = Camera:WorldToViewportPoint(rim.Position)
+                    if on then
+                        bestRim, bestDist = rim, dist
+                    end
+                end
+            end
+        end
+        if bestRim and bestRim ~= selectedRim then
+            selectedRim = bestRim
+            notify('🎯 Auto-Locked Nearest Rim', Color3.fromRGB(255, 230, 0))
+        end
+    end
+end)
+
+--// === Toggles (unchanged) ===
+UserInputService.InputBegan:Connect(function(i, gp)
+    if gp then
+        return
+    end
+    if i.KeyCode == Enum.KeyCode.O then
+        DotsEnabled = not DotsEnabled
+    elseif i.KeyCode == Enum.KeyCode.V then
+        toggleOn = not toggleOn
+        notify(
+            toggleOn and 'System ON' or 'System OFF',
+            toggleOn and Color3.new(0, 1, 0) or Color3.new(1, 0, 0)
+        )
+    end
+end)
+
+--// === Capture Shoot Key (unchanged) ===
+local old
+old = hookmetamethod(game, '__namecall', function(self, ...)
+    local m = getnamecallmethod()
+    if m == 'FireServer' and self == shootRemote then
+        local args = { ... }
+        if type(args[3]) == 'string' and not shootKey then
+            shootKey = args[3]
+            print('[Captured ShootKey]:', shootKey)
+            notify('Shoot key captured!', Color3.new(0, 1, 0))
+        end
+    end
+    return old(self, ...)
+end)
+
+--// === Moving Realign Logic (unchanged) ===
+local lastTick, moveOffset = 0, Vector3.zero
+local function computeOffset()
+    if tick() - lastTick > 0.1 then
+        local hum = plr.Character
+            and plr.Character:FindFirstChildOfClass('Humanoid')
+        local moveDir = (hum and hum.MoveDirection) or Vector3.zero
+        moveOffset = Vector3.new(moveDir.X * 1.5, 0, moveDir.Z * 1.5)
+        lastTick = tick()
+    end
+    return moveOffset
+end
+
+local function computeArc(dist)
+    return Vector3.new(0, 43 + (dist / 15), 0)
+end
+
+local function smartAim(rim)
+    local offset = computeOffset()
+    local root = plr.Character:FindFirstChild('HumanoidRootPart')
+    if not root then
+        return rim.Position
+    end
+    local dist = (root.Position - rim.Position).Magnitude
+    return rim.Position + computeArc(dist) - offset
+end
+
+--// ===================================================
+--//   VECTOR3 ANALYTICS CONSOLE (SCROLL-STABLE, SINGLETON)
+--// ===================================================
+
+-- Destroy previous console if re-executed
+local prev = CoreGui:FindFirstChild('Vector3AnalyticsPro')
+if prev then
+    prev:Destroy()
+end
+
+local console = Instance.new('ScreenGui')
+console.Name = 'Vector3AnalyticsPro'
+console.ResetOnSpawn = false
+console.Parent = CoreGui
+
+local frame = Instance.new('Frame')
+frame.Name = 'Container'
+frame.AnchorPoint = Vector2.new(1, 1)
+frame.Position = UDim2.new(1, -20, 1, -20)
+frame.Size = UDim2.new(0, 360, 0, 230)
+frame.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+frame.BackgroundTransparency = 0.08
+frame.BorderSizePixel = 0
+frame.Parent = console
+
+local header = Instance.new('TextLabel')
+header.Size = UDim2.new(1, 0, 0, 22)
+header.BackgroundTransparency = 1
+header.Font = Enum.Font.Code
+header.Text = 'VECTOR3 ANALYTICS — ENGINEERING CONSOLE'
+header.TextSize = 17
+header.TextColor3 = Color3.fromRGB(255, 230, 0)
+header.Parent = frame
+
+local scroll = Instance.new('ScrollingFrame')
+scroll.Name = 'Log'
+scroll.Position = UDim2.new(0, 6, 0, 26)
+scroll.Size = UDim2.new(1, -12, 1, -52)
+scroll.BackgroundTransparency = 1
+scroll.BorderSizePixel = 0
+scroll.ScrollBarThickness = 6
+scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+scroll.Parent = frame
+
+local layout = Instance.new('UIListLayout', scroll)
+layout.Padding = UDim.new(0, 1)
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+
+local footer = Instance.new('TextLabel')
+footer.AnchorPoint = Vector2.new(0.5, 1)
+footer.Position = UDim2.new(0.5, 0, 1, -4)
+footer.Size = UDim2.new(1, -10, 0, 20)
+footer.BackgroundTransparency = 1
+footer.Font = Enum.Font.Code
+footer.TextSize = 15
+footer.TextColor3 = Color3.fromRGB(180, 180, 180)
+footer.Text = 'No shots fired yet'
+footer.Parent = frame
+
+-- Data buffers
+local history, lastVec = {}, nil
+local MAX_LINES = 250
+local avgDrift = Vector3.zero
+local shotCount = 0
+local t0 = tick()
+
+local function newLine(str)
+    local label = Instance.new('TextLabel')
+    label.BackgroundTransparency = 1
+    label.Font = Enum.Font.Code
+    label.TextSize = 15
+    label.TextColor3 = Color3.fromRGB(230, 230, 230)
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Size = UDim2.new(1, -8, 0, 16)
+    label.Text = str
+    label.LayoutOrder = shotCount -- ensures chronological bottom growth
+    label.Parent = scroll
+end
+
+local function logVector(vec)
+    if typeof(vec) ~= 'Vector3' then
+        return
+    end
+    shotCount += 1
+    local now = tick() - t0
+    local delta = lastVec and (vec - lastVec) or Vector3.zero
+    lastVec = vec
+
+    table.insert(history, { t = now, v = vec, d = delta })
+    if #history > MAX_LINES then
+        -- remove oldest label & record
+        local oldest = scroll:FindFirstChildWhichIsA('TextLabel')
+        if oldest then
+            oldest:Destroy()
+        end
+        table.remove(history, 1)
+    end
+
+    -- rolling average drift
+    local sum = Vector3.zero
+    for _, e in ipairs(history) do
+        sum += e.d
+    end
+    local avg = sum / #history
+    avgDrift = avgDrift:Lerp(avg, 0.3)
+
+    -- add row
+    local line = string.format(
+        '[#%03d | T+%.1fs]  X%.2f  Y%.2f  Z%.2f   |   ΔX%.2f  ΔY%.2f  ΔZ%.2f',
+        shotCount,
+        now,
+        vec.X,
+        vec.Y,
+        vec.Z,
+        delta.X,
+        delta.Y,
+        delta.Z
+    )
+    newLine(line)
+
+    -- auto-scroll to bottom
+    scroll.CanvasPosition = Vector2.new(0, math.huge)
+    footer.Text = string.format(
+        'Avg Drift  X%.3f  Y%.3f  Z%.3f   (%d records)',
+        avgDrift.X,
+        avgDrift.Y,
+        avgDrift.Z,
+        #history
+    )
+end
+
+-- expose analytics API if you ever want to log from elsewhere
+_G.Vector3Logger = { LogVector = logVector }
+
+--// ===================================================
+--//   SHOOT (YOUR ORIGINAL MECHANIC, UNCHANGED)
+--// ===================================================
+local function shootAtTarget()
+    if not (selectedRim and selectedRim:IsDescendantOf(workspace)) then
+        return notify('❌ No Target', Color3.new(1, 0.3, 0.3))
+    end
+    if not shootKey then
+        return notify('⚙️ Shoot Key Missing', Color3.new(1, 0.8, 0.3))
+    end
+
+    local c = plr.Character
+    if not c then
+        return
+    end
+    local head, root = c:FindFirstChild('Head'), c.PrimaryPart
+    if not (head and root) then
+        return
+    end
+
+    local aimPos = smartAim(selectedRim)
+    local dir = (aimPos - head.Position).Unit
+    local shootFrom = root.Position + dir * 3.8
+    if shootFrom.Y - root.Position.Y < 4 then
+        shootFrom = root.Position + dir * 4
+    end
+
+    shootRemote:FireServer(aimPos, shootFrom, shootKey)
+    notify('🏀 Shot Fired!', Color3.new(0, 1, 0))
+
+    -- analytics record
+    logVector(aimPos)
+end
+
+--// === Click to Shoot (unchanged) ===
+UserInputService.InputBegan:Connect(function(i, gp)
+    if gp or not toggleOn then
+        return
+    end
+    if i.UserInputType == Enum.UserInputType.MouseButton1 then
+        shootAtTarget()
+    end
+end)
+
+print('[🏀 Auto Aim Basketball + Scroll-Stable Analytics Loaded]')
+print('[V] Toggle system | [O] Toggle dots')
