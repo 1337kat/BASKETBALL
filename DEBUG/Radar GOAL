@@ -1,0 +1,269 @@
+--// ===================================================
+--//   AUTO AIM BASKETBALL SHOOTER (CLICK TO SHOOT)
+--//   Holy Grail + Vector Equalization Debug GUI
+--//   Rim dots static; aim equalized across all angles
+--// ===================================================
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CoreGui = game:GetService("CoreGui")
+local Camera = workspace.CurrentCamera
+
+local plr = Players.LocalPlayer
+local char = plr.Character or plr.CharacterAdded:Wait()
+local remotes = ReplicatedStorage:WaitForChild("Remotes")
+local shootRemote = remotes:WaitForChild("Shoot")
+
+local toggleOn, DotsEnabled = true, true
+local shootKey, selectedRim = nil, nil
+local moveOffset = Vector3.zero
+
+--// === Notify ===
+local function notify(msg, color)
+	local gui = Instance.new("ScreenGui", CoreGui)
+	gui.ResetOnSpawn = false
+	local label = Instance.new("TextLabel", gui)
+	label.AnchorPoint = Vector2.new(0.5, 0.5)
+	label.BackgroundTransparency = 1
+	label.TextColor3 = color or Color3.new(1, 1, 1)
+	label.Font = Enum.Font.Code
+	label.TextSize = 26
+	label.Text = msg
+	label.Position = UDim2.new(0.5, 0, 0.9, 0)
+	task.spawn(function() task.wait(1.5) gui:Destroy() end)
+end
+
+--// === Debug GUI (Equalization Visualizer) ===
+local dbgGui = Instance.new("ScreenGui", CoreGui)
+dbgGui.Name = "VectorEqualizer"
+dbgGui.ResetOnSpawn = false
+
+local dbgFrame = Instance.new("Frame", dbgGui)
+dbgFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+dbgFrame.Position = UDim2.new(0.85, 0, 0.5, 0)
+dbgFrame.Size = UDim2.new(0, 240, 0, 240)
+dbgFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+dbgFrame.BackgroundTransparency = 0.25
+dbgFrame.BorderSizePixel = 0
+
+local centerDot = Instance.new("Frame", dbgFrame)
+centerDot.Size = UDim2.new(0, 6, 0, 6)
+centerDot.AnchorPoint = Vector2.new(0.5, 0.5)
+centerDot.Position = UDim2.new(0.5, 0, 0.5, 0)
+centerDot.BackgroundColor3 = Color3.new(1,1,1)
+centerDot.BorderSizePixel = 0
+
+local dbgText = Instance.new("TextLabel", dbgFrame)
+dbgText.Size = UDim2.new(1, -10, 0, 50)
+dbgText.Position = UDim2.new(0.5, 0, 0, 5)
+dbgText.AnchorPoint = Vector2.new(0.5, 0)
+dbgText.BackgroundTransparency = 1
+dbgText.TextColor3 = Color3.new(1,1,1)
+dbgText.Font = Enum.Font.Code
+dbgText.TextSize = 18
+dbgText.TextWrapped = true
+dbgText.Text = "Vector Equalizer Active"
+
+local line = Instance.new("Frame", dbgFrame)
+line.AnchorPoint = Vector2.new(0.5, 1)
+line.Size = UDim2.new(0, 2, 0, 80)
+line.Position = UDim2.new(0.5, 0, 0.5, 0)
+line.BackgroundColor3 = Color3.fromRGB(255,255,0)
+line.BorderSizePixel = 0
+
+local ring = Instance.new("ImageLabel", dbgFrame)
+ring.AnchorPoint = Vector2.new(0.5,0.5)
+ring.Position = UDim2.new(0.5,0,0.5,0)
+ring.Size = UDim2.new(0,180,0,180)
+ring.BackgroundTransparency = 1
+ring.Image = "rbxassetid://10164771850"
+ring.ImageColor3 = Color3.fromRGB(90,255,90)
+ring.ImageTransparency = 0.3
+
+--// === Rim Dot ESP ===
+local RimDots = {}
+local RimSize = Vector3.new(3.632131576538086,0.5587897300720215,3.632131576538086)
+
+local function addRimDot(rim)
+	local dot = Drawing.new("Circle")
+	dot.Radius, dot.Filled, dot.Color = 4, true, Color3.new(1,0,0)
+	RimDots[rim] = dot
+end
+local function removeRimDot(rim)
+	if RimDots[rim] then RimDots[rim]:Remove() RimDots[rim] = nil end
+	if selectedRim == rim then selectedRim = nil end
+end
+
+RunService.RenderStepped:Connect(function()
+	for rim,dot in pairs(RimDots) do
+		if rim:IsDescendantOf(workspace) and DotsEnabled then
+			local pos,on = Camera:WorldToViewportPoint(rim.Position)
+			dot.Position, dot.Visible = Vector2.new(pos.X,pos.Y), on
+			dot.Color = (rim==selectedRim) and Color3.new(1,1,0) or Color3.new(1,0,0)
+			dot.Radius = (rim==selectedRim) and 6 or 4
+		else dot.Visible=false end
+	end
+end)
+
+workspace.DescendantAdded:Connect(function(o)
+	if o:IsA("BasePart") and o.Name=="Rim" and o.Size==RimSize then addRimDot(o) end
+end)
+workspace.DescendantRemoving:Connect(removeRimDot)
+for _,v in ipairs(workspace:GetDescendants()) do
+	if v:IsA("BasePart") and v.Name=="Rim" and v.Size==RimSize then addRimDot(v) end
+end
+
+--// === Auto Rim Lock ===
+task.spawn(function()
+	while task.wait(0.1) do
+		if not toggleOn then continue end
+		local root = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+		if not root then continue end
+		local bestRim,bestDist=nil,85
+		for rim in pairs(RimDots) do
+			if rim:IsDescendantOf(workspace) then
+				local dist=(rim.Position-root.Position).Magnitude
+				if dist<bestDist then
+					local _,on=Camera:WorldToViewportPoint(rim.Position)
+					if on then bestRim,bestDist=rim,dist end
+				end
+			end
+		end
+		if bestRim and bestRim~=selectedRim then
+			selectedRim=bestRim
+			notify("🎯 Auto-Locked Nearest Rim",Color3.fromRGB(255,230,0))
+		end
+	end
+end)
+
+--// === Toggles ===
+UserInputService.InputBegan:Connect(function(i,gp)
+	if gp then return end
+	if i.KeyCode==Enum.KeyCode.O then
+		DotsEnabled=not DotsEnabled
+	elseif i.KeyCode==Enum.KeyCode.V then
+		toggleOn=not toggleOn
+		notify(toggleOn and "System ON" or "System OFF",
+			toggleOn and Color3.new(0,1,0) or Color3.new(1,0,0))
+	end
+end)
+
+--// === Capture Shoot Key ===
+local old
+old=hookmetamethod(game,"__namecall",function(self,...)
+	local m=getnamecallmethod()
+	if m=="FireServer" and self==shootRemote then
+		local args={...}
+		if type(args[3])=="string" and not shootKey then
+			shootKey=args[3]
+			print("[Captured ShootKey]:",shootKey)
+			notify("Shoot key captured!",Color3.new(0,1,0))
+		end
+	end
+	return old(self,...)
+end)
+
+--// === RIM BASIS HELPERS ===
+local function getRimBasis(rim, root)
+	local forward = (rim.Position - root.Position).Unit
+	local up = Vector3.new(0,1,0)
+	local right = forward:Cross(up).Unit
+	return right, up, forward
+end
+
+--// === SMART OFFSET (Equalized Rim Space) ===
+local function computeEqualizedOffset(rim, root, moveDir)
+	if moveDir.Magnitude == 0 then return Vector3.zero end
+	local right, up, forward = getRimBasis(rim, root)
+	local rightComp   = right * moveDir:Dot(right)
+	local forwardComp = forward * moveDir:Dot(forward)
+	local offset = (rightComp * 1.0) + (forwardComp * 0.8)
+
+	local dist = (rim.Position - root.Position).Magnitude
+	local norm = math.clamp(dist / 60, 0.8, 1.2)
+	offset *= norm
+	moveOffset = moveOffset:Lerp(offset, 0.25)
+	return moveOffset
+end
+
+--// === Compute Arc ===
+local function computeArc(dist)
+	return Vector3.new(0, 43 + (dist / 15), 0)
+end
+
+--// === SMART AIM ===
+local function smartAim(rim)
+	local char = plr.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if not (hum and root and rim) then return rim.Position end
+	local moveDir = hum.MoveDirection
+	local offset = computeEqualizedOffset(rim, root, moveDir)
+	local dist = (rim.Position - root.Position).Magnitude
+	return rim.Position + computeArc(dist) - offset
+end
+
+--// === SHOOT ===
+local function shootAtTarget()
+	if not (selectedRim and selectedRim:IsDescendantOf(workspace)) then
+		return notify("❌ No Target",Color3.new(1,0.3,0.3))
+	end
+	if not shootKey then
+		return notify("⚙️ Shoot Key Missing",Color3.new(1,0.8,0.3))
+	end
+
+	local char = plr.Character
+	if not char then return end
+	local head, root = char:FindFirstChild("Head"), char.PrimaryPart
+	if not (head and root) then return end
+
+	local aimPos = smartAim(selectedRim)
+	local dir = (aimPos - head.Position).Unit
+	local shootFrom = root.Position + dir * 3.8
+	if shootFrom.Y - root.Position.Y < 4 then
+		shootFrom = root.Position + dir * 4
+	end
+
+	shootRemote:FireServer(aimPos, shootFrom, shootKey)
+	notify("🏀 Shot Fired!",Color3.new(0,1,0))
+end
+
+--// === CLICK TO SHOOT ===
+UserInputService.InputBegan:Connect(function(i,gp)
+	if gp or not toggleOn then return end
+	if i.UserInputType==Enum.UserInputType.MouseButton1 then
+		shootAtTarget()
+	end
+end)
+
+--// === VISUALIZER LOOP ===
+RunService.RenderStepped:Connect(function()
+	if not (selectedRim and plr.Character) then return end
+	local root = plr.Character:FindFirstChild("HumanoidRootPart")
+	local hum  = plr.Character:FindFirstChildOfClass("Humanoid")
+	if not (root and hum) then return end
+
+	local moveDir = hum.MoveDirection
+	local right, up, forward = getRimBasis(selectedRim, root)
+	local rMag = moveDir:Dot(right)
+	local fMag = moveDir:Dot(forward)
+	local angle = math.deg(math.atan2(fMag, rMag))
+	local magnitude = moveDir.Magnitude
+
+	dbgText.Text = string.format("Right: %.2f | Forward: %.2f\nAngle: %.1f°", rMag, fMag, angle)
+
+	-- draw yellow vector
+	local cx, cy = dbgFrame.AbsoluteSize.X/2, dbgFrame.AbsoluteSize.Y/2
+	local len = math.clamp(magnitude * 90, 0, 90)
+	local endX = cx + rMag * len
+	local endY = cy - fMag * len
+	line.Position = UDim2.new(0, cx, 0, cy)
+	line.Rotation = math.deg(math.atan2(endY - cy, endX - cx)) + 90
+	line.Size = UDim2.new(0, 2, 0, math.sqrt((endX-cx)^2 + (endY-cy)^2))
+	line.BackgroundColor3 = Color3.fromHSV(((angle % 360)/360), 1, 1)
+end)
+
+print("[🏀 Auto Aim Basketball] Holy Grail + Equalization Debug GUI loaded.")
+print("[V] Toggle system | [O] Toggle dots")
