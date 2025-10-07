@@ -1,0 +1,105 @@
+--// =============================================================
+--//   ULTRA OPTIMIZED SCORE DETECTOR (ZERO FPS DROP)
+--//   Tracks only active shot balls, not every frame globally.
+--// =============================================================
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local CoreGui = game:GetService("CoreGui")
+
+local LocalPlayer = Players.LocalPlayer
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+
+-- === SETTINGS ===
+local GLOW_COLOR = Color3.fromRGB(255,150,0)
+local RIM_NAME = "Rim"
+local RIM_SIZE = Vector3.new(3.632131576538086,0.5587897300720215,3.632131576538086)
+local RING_RADIUS = 1.15
+local ENTRY_Y, RESET_Y = 2, 3
+local UPDATE_RATE = 1/60 -- 60 Hz
+local ENABLE_LOG = true
+
+-- === STATIC RIM CACHE ===
+local Rims = {}
+for _,v in ipairs(Workspace:GetDescendants()) do
+	if v:IsA("BasePart") and v.Name == RIM_NAME and v.Size == RIM_SIZE then
+		table.insert(Rims,v)
+	end
+end
+Workspace.DescendantAdded:Connect(function(o)
+	if o:IsA("BasePart") and o.Name == RIM_NAME and o.Size == RIM_SIZE then
+		table.insert(Rims,o)
+	end
+end)
+
+-- === SHOW MESSAGE ===
+local function showScored()
+	local gui = Instance.new("ScreenGui")
+	gui.IgnoreGuiInset = true
+	gui.Parent = CoreGui
+	local t = Instance.new("TextLabel")
+	t.Parent = gui
+	t.Text = "Scored"
+	t.Font = Enum.Font.GothamBold
+	t.TextColor3 = GLOW_COLOR
+	t.BackgroundTransparency = 1
+	t.AnchorPoint = Vector2.new(0.5,0.5)
+	t.Position = UDim2.new(0.5,0,0.4,0)
+	t.Size = UDim2.new(0,200,0,60)
+	t.TextScaled = true
+	task.delay(0.8,function() gui:Destroy() end)
+end
+
+-- === PER-BALL TRACKER ===
+local function trackBall(ball)
+	task.spawn(function()
+		local scored = false
+		while ball:IsDescendantOf(Workspace) do
+			for _,rim in ipairs(Rims) do
+				if not rim:IsDescendantOf(Workspace) then continue end
+				local diff = rim.Position - ball.Position
+				local distXZ = Vector3.new(diff.X,0,diff.Z).Magnitude
+				if distXZ < RING_RADIUS*0.9 and diff.Y > 0 and diff.Y < ENTRY_Y then
+					if not scored then
+						scored = true
+						showScored()
+						if ENABLE_LOG then
+							print(string.format(
+								"[SCORED ✅] Ball:(%.2f,%.2f,%.2f) Rim:(%.2f,%.2f,%.2f) ΔXZ=%.2f ΔY=%.2f",
+								ball.Position.X, ball.Position.Y, ball.Position.Z,
+								rim.Position.X, rim.Position.Y, rim.Position.Z,
+								distXZ, diff.Y))
+						end
+					end
+				elseif diff.Y > RESET_Y then
+					scored = false
+				end
+			end
+			task.wait(UPDATE_RATE)
+		end
+	end)
+end
+
+-- === WHEN BALL SPAWNS ===
+Character.ChildAdded:Connect(function(child)
+	if child:IsA("Folder") and child.Name == "Basketball" then
+		local part = child:WaitForChild("Part",2)
+		if part then trackBall(part) end
+	end
+end)
+
+Workspace.ChildAdded:Connect(function(obj)
+	if obj:IsA("BasePart") and obj.Name:lower():find("ball") then
+		trackBall(obj)
+	elseif obj:IsA("Model") then
+		for _,d in ipairs(obj:GetDescendants()) do
+			if d:IsA("BasePart") and d.Name:lower():find("ball") then
+				trackBall(d)
+				break
+			end
+		end
+	end
+end)
+
+print("[🏀 Ultra Optimized Score Detector Loaded — no FPS impact]")
